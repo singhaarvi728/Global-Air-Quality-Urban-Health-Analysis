@@ -1,149 +1,213 @@
-#!/usr/bin/env python
-# coding: utf-8
+from pathlib import Path
 
-# In[19]:
-
-
-import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
+import streamlit as st
 
-st.set_page_config(layout="wide", page_icon="🌍")
 
-@st.cache_data
-def create_perfect_data():
-    """Creates bulletproof data that always works"""
-    try:
-        df = pd.read_csv("global-air-pollution-dataset.csv")
-        df.columns = [col.strip() for col in df.columns]
-    except:
-        # PERFECT SAMPLE DATA - NO ERRORS POSSIBLE
-        np.random.seed(42)
-        data = {
-            'Country': np.random.choice(['India', 'China', 'USA', 'Germany', 'Brazil', 'Pakistan'], 2000),
-            'City': [f'City_{i}' for i in range(2000)],
-            'AQI_Value': np.random.randint(30, 350, 2000),
-            'Continent': np.random.choice(['Asia', 'Asia', 'North America', 'Europe', 'South America', 'Asia'], 2000)
-        }
-        df = pd.DataFrame(data)
+st.set_page_config(
+    page_title="Global Air Quality Explorer",
+    page_icon="🌍",
+    layout="wide",
+)
 
-    return df.reset_index(drop=True)
+DATA_PATH = Path(__file__).resolve().parent / "global air pollution dataset.csv"
+REQUIRED_COLUMNS = {"Country", "City", "AQI Value", "AQI Category"}
+POLLUTANT_COLUMNS = {
+    "CO AQI Value": "Carbon monoxide",
+    "Ozone AQI Value": "Ozone",
+    "NO2 AQI Value": "Nitrogen dioxide",
+    "PM2.5 AQI Value": "PM2.5",
+}
 
-# LOAD DATA
-df = create_perfect_data()
-st.success(f"✅ Loaded {len(df):,} cities perfectly")
 
-# HEADER
-st.title("🌍 Global Air Quality Dashboard")
-st.markdown("**8 Interactive Visualizations - Production Ready**")
+@st.cache_data(show_spinner=False)
+def load_data(csv_path: str, _file_mtime: float) -> pd.DataFrame:
+    """Load and validate the committed dataset; never invent replacement records."""
+    data = pd.read_csv(csv_path, encoding="utf-8-sig")
+    data.columns = [str(column).strip() for column in data.columns]
 
-# SAFE METRICS
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("📍 Cities", f"{len(df):,}")
-col2.metric("🌡️ Average AQI", f"{df['AQI_Value'].mean():.0f}")
-col3.metric("🔴 Highest AQI", f"{df['AQI_Value'].max()}")
-col4.metric("🏛️ Countries", df['Country'].nunique())
+    missing = REQUIRED_COLUMNS.difference(data.columns)
+    if missing:
+        raise ValueError(
+            "The CSV is missing required columns: " + ", ".join(sorted(missing))
+        )
 
-st.markdown("---")
+    for column in ("Country", "City", "AQI Category"):
+        data[column] = data[column].astype("string").str.strip()
 
-# SAFE FILTERS
-st.sidebar.header("🔍 Filters")
-all_countries = df['Country'].unique()[:15]
-selected_countries = st.sidebar.multiselect("Countries", all_countries, default=all_countries[:5])
+    numeric_columns = ["AQI Value", *POLLUTANT_COLUMNS.keys()]
+    for column in numeric_columns:
+        if column in data.columns:
+            data[column] = pd.to_numeric(data[column], errors="coerce")
 
-all_continents = df['Continent'].unique()
-selected_continents = st.sidebar.multiselect("Continents", all_continents, default=['Asia'])
+    data = data.dropna(subset=["Country", "City", "AQI Value"]).copy()
+    data = data[(data["Country"] != "") & (data["City"] != "")]
 
-# SAFE FILTERING
-filtered_df = df[
-    df['Country'].isin(selected_countries) & 
-    df['Continent'].isin(selected_continents)
+    if data.empty:
+        raise ValueError("No usable rows remain after validating the required fields.")
+
+    data["AQI Category"] = data["AQI Category"].fillna("Unknown")
+    return data.reset_index(drop=True)
+
+
+st.title("🌍 Global Air Quality Explorer")
+st.write(
+    "Explore the committed air-quality dataset by country, city, AQI category "
+    "and pollutant-specific AQI indicators."
+)
+
+if not DATA_PATH.is_file():
+    st.error(
+        "Dataset not found. Place 'global air pollution dataset.csv' next to "
+        "this Streamlit file, then reload the app."
+    )
+    st.stop()
+
+try:
+    df = load_data(str(DATA_PATH), DATA_PATH.stat().st_mtime)
+except Exception as error:
+    st.error(f"Dataset could not be loaded: {error}")
+    st.stop()
+
+st.caption(
+    f"Source: repository CSV snapshot · {len(df):,} usable records · "
+    "This is a static dataset, not a live air-quality feed."
+)
+
+st.sidebar.header("Filters")
+countries = sorted(df["Country"].dropna().astype(str).unique().tolist())
+categories = sorted(df["AQI Category"].dropna().astype(str).unique().tolist())
+
+selected_countries = st.sidebar.multiselect(
+    "Countries",
+    options=countries,
+    default=countries,
+)
+selected_categories = st.sidebar.multiselect(
+    "AQI categories",
+    options=categories,
+    default=categories,
+)
+
+filtered = df[
+    df["Country"].isin(selected_countries)
+    & df["AQI Category"].isin(selected_categories)
 ].copy()
 
-if len(filtered_df) == 0:
-    filtered_df = df.head(100).copy()
+if filtered.empty:
+    st.warning("No records match the selected filters. Adjust the sidebar filters.")
+    st.stop()
 
-st.sidebar.info(f"📊 Showing {len(filtered_df):,} cities")
+metric_1, metric_2, metric_3 = st.columns(3)
+metric_1.metric("Records in view", f"{len(filtered):,}")
+metric_2.metric("Countries in view", f"{filtered['Country'].nunique():,}")
+metric_3.metric("Mean AQI value", f"{filtered['AQI Value'].mean():.1f}")
 
-# === VISUALIZATION 1: Worst/Best Cities ===
-st.subheader("🏙️ 1. Worst & Best Cities by AQI")
-city_stats = filtered_df.groupby(['Country', 'City'])['AQI_Value'].mean().reset_index()
+st.divider()
 
-col1, col2 = st.columns(2)
-with col1:
-    worst_cities = city_stats.nlargest(10, 'AQI_Value')
-    fig1 = px.bar(worst_cities, x='AQI_Value', y='City', orientation='h',
-                  color='AQI_Value', color_continuous_scale='Reds_r',
-                  title="🔴 Top 10 Worst")
-    fig1.update_layout(height=400)
-    st.plotly_chart(fig1, use_container_width=True)
+st.subheader("City comparisons")
+city_stats = (
+    filtered.groupby(["Country", "City"], as_index=False)["AQI Value"]
+    .mean()
+)
+city_stats["Location"] = (
+    city_stats["City"].astype(str) + ", " + city_stats["Country"].astype(str)
+)
 
-with col2:
-    best_cities = city_stats.nsmallest(10, 'AQI_Value')
-    fig2 = px.bar(best_cities, x='AQI_Value', y='City', orientation='h',
-                  color='AQI_Value', color_continuous_scale='Greens',
-                  title="🟢 Top 10 Best")
-    fig2.update_layout(height=400)
-    st.plotly_chart(fig2, use_container_width=True)
+left, right = st.columns(2)
+with left:
+    worst = city_stats.nlargest(10, "AQI Value").sort_values("AQI Value")
+    worst_chart = px.bar(
+        worst,
+        x="AQI Value",
+        y="Location",
+        orientation="h",
+        title="10 highest city AQI averages",
+        labels={"AQI Value": "Mean AQI value", "Location": "City"},
+    )
+    st.plotly_chart(worst_chart, use_container_width=True)
 
-# === VISUALIZATION 2: Country Ranking ===
-st.subheader("🌍 2. Country AQI Rankings")
-country_avg = filtered_df.groupby('Country')['AQI_Value'].mean().sort_values(ascending=False).head(12)
-fig3 = px.bar(country_avg.reset_index(), x='AQI_Value', y='Country',
-              color='AQI_Value', color_continuous_scale='Viridis_r',
-              title="Average AQI by Country")
-st.plotly_chart(fig3, use_container_width=True)
+with right:
+    best = city_stats.nsmallest(10, "AQI Value").sort_values(
+        "AQI Value", ascending=False
+    )
+    best_chart = px.bar(
+        best,
+        x="AQI Value",
+        y="Location",
+        orientation="h",
+        title="10 lowest city AQI averages",
+        labels={"AQI Value": "Mean AQI value", "Location": "City"},
+    )
+    st.plotly_chart(best_chart, use_container_width=True)
 
-# === VISUALIZATION 3: Continent Box Plot ===
-st.subheader("📦 3. AQI Distribution by Continent")
-fig4 = px.box(filtered_df, x='Continent', y='AQI_Value', 
-              color='Continent', title="Box Plot by Continent")
-st.plotly_chart(fig4, use_container_width=True)
+st.subheader("Country-level comparison")
+country_stats = (
+    filtered.groupby("Country", as_index=False)["AQI Value"]
+    .mean()
+    .nlargest(15, "AQI Value")
+    .sort_values("AQI Value")
+)
+country_chart = px.bar(
+    country_stats,
+    x="AQI Value",
+    y="Country",
+    orientation="h",
+    title="15 highest country-level mean AQI values",
+    labels={"AQI Value": "Mean AQI value"},
+)
+st.plotly_chart(country_chart, use_container_width=True)
 
-# === VISUALIZATION 4: AQI Histogram ===
-st.subheader("📊 4. AQI Distribution Histogram")
-fig5 = px.histogram(filtered_df, x='AQI_Value', nbins=30, 
-                    color='Continent', title="AQI Value Distribution")
-st.plotly_chart(fig5, use_container_width=True)
+st.subheader("AQI category distribution")
+category_stats = (
+    filtered["AQI Category"]
+    .value_counts()
+    .rename_axis("AQI Category")
+    .reset_index(name="Records")
+)
+category_chart = px.bar(
+    category_stats,
+    x="AQI Category",
+    y="Records",
+    title="Records by AQI category",
+)
+st.plotly_chart(category_chart, use_container_width=True)
 
-# === VISUALIZATION 5: Sunburst Hierarchy ===
-st.subheader("🌞 5. Continent → Country Hierarchy")
-hier_data = filtered_df.groupby(['Continent', 'Country']).size().reset_index(name='Cities')
-fig6 = px.sunburst(hier_data, path=['Continent', 'Country'], values='Cities',
-                   title="Geographic Hierarchy")
-st.plotly_chart(fig6, use_container_width=True)
+st.subheader("AQI value distribution")
+histogram = px.histogram(
+    filtered,
+    x="AQI Value",
+    color="AQI Category",
+    nbins=35,
+    title="Distribution of AQI values",
+)
+st.plotly_chart(histogram, use_container_width=True)
 
-# === VISUALIZATION 6: Violin Plot ===
-st.subheader("🎻 6. Detailed AQI Distribution")
-fig7 = px.violin(filtered_df, x='Continent', y='AQI_Value', 
-                 color='Continent', box=True, points=False)
-st.plotly_chart(fig7, use_container_width=True)
+available_pollutants = [
+    column for column in POLLUTANT_COLUMNS if column in filtered.columns
+]
+if available_pollutants:
+    st.subheader("Pollutant-specific AQI indicators")
+    pollutant_data = filtered[available_pollutants].rename(
+        columns=POLLUTANT_COLUMNS
+    ).melt(var_name="Pollutant", value_name="AQI sub-index")
+    pollutant_data = pollutant_data.dropna(subset=["AQI sub-index"])
+    if not pollutant_data.empty:
+        pollutant_chart = px.box(
+            pollutant_data,
+            x="Pollutant",
+            y="AQI sub-index",
+            color="Pollutant",
+            title="Distribution of pollutant-specific AQI values",
+        )
+        st.plotly_chart(pollutant_chart, use_container_width=True)
 
-# === VISUALIZATION 7: Scatter Plot (FIXED) ===
-st.subheader("🗺️ 7. Country AQI Scatter")
-sample_size = min(200, len(filtered_df))  # SAFE SAMPLING
-fig8 = px.scatter(filtered_df.sample(n=sample_size, random_state=42), 
-                  x='Country', y='AQI_Value', color='Continent',
-                  size='AQI_Value', hover_name='City',
-                  title="AQI by Country")
-fig8.update_layout(height=500)
-st.plotly_chart(fig8, use_container_width=True)
+with st.expander("Explore the filtered records"):
+    st.dataframe(filtered, use_container_width=True, hide_index=True)
 
-# === VISUALIZATION 8: Data Table ===
-with st.expander("📋 8. Raw Data Explorer"):
-    st.dataframe(filtered_df[['Country', 'City', 'AQI_Value', 'Continent']].style
-                .background_gradient(cmap='Reds', subset=['AQI_Value']))
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
+st.caption(
+    "Interpretation note: this dashboard summarises the fields in the supplied "
+    "dataset. It does not measure personal exposure, establish causation, or "
+    "demonstrate health outcomes."
+)
