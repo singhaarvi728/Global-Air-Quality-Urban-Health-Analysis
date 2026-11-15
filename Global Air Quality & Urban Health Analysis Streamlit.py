@@ -22,7 +22,7 @@ POLLUTANT_COLUMNS = {
 
 
 @st.cache_data(show_spinner=False)
-def load_data(csv_path: str, _file_mtime: float) -> tuple[pd.DataFrame, int]:
+def load_data(csv_path: str, file_mtime: float) -> tuple[pd.DataFrame, int]:
     """Load and validate the committed dataset; never invent replacement records."""
     data = pd.read_csv(csv_path, encoding="utf-8-sig")
     data.columns = [str(column).strip() for column in data.columns]
