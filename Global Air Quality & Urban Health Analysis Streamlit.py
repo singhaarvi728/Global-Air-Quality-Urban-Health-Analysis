@@ -22,7 +22,7 @@ POLLUTANT_COLUMNS = {
 
 
 @st.cache_data(show_spinner=False)
-def load_data(csv_path: str, _file_mtime: float) -> pd.DataFrame:
+def load_data(csv_path: str, _file_mtime: float) -> tuple[pd.DataFrame, int]:
     """Load and validate the committed dataset; never invent replacement records."""
     data = pd.read_csv(csv_path, encoding="utf-8-sig")
     data.columns = [str(column).strip() for column in data.columns]
@@ -41,14 +41,21 @@ def load_data(csv_path: str, _file_mtime: float) -> pd.DataFrame:
         if column in data.columns:
             data[column] = pd.to_numeric(data[column], errors="coerce")
 
-    data = data.dropna(subset=["Country", "City", "AQI Value"]).copy()
-    data = data[(data["Country"] != "") & (data["City"] != "")]
+    invalid_rows = (
+        data["Country"].isna()
+        | data["City"].isna()
+        | data["AQI Value"].isna()
+        | (data["Country"] == "")
+        | (data["City"] == "")
+    )
+    rows_removed = int(invalid_rows.sum())
+    data = data.loc[~invalid_rows].copy()
 
     if data.empty:
         raise ValueError("No usable rows remain after validating the required fields.")
 
     data["AQI Category"] = data["AQI Category"].fillna("Unknown")
-    return data.reset_index(drop=True)
+    return data.reset_index(drop=True), rows_removed
 
 
 st.title("🌍 Global Air Quality Explorer")
@@ -65,13 +72,14 @@ if not DATA_PATH.is_file():
     st.stop()
 
 try:
-    df = load_data(str(DATA_PATH), DATA_PATH.stat().st_mtime)
+    df, rows_removed = load_data(str(DATA_PATH), DATA_PATH.stat().st_mtime)
 except Exception as error:
     st.error(f"Dataset could not be loaded: {error}")
     st.stop()
 
 st.caption(
     f"Source: repository CSV snapshot · {len(df):,} usable records · "
+    f"{rows_removed:,} rows excluded for missing location or AQI values · "
     "This is a static dataset, not a live air-quality feed."
 )
 
