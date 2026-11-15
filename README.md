@@ -19,6 +19,8 @@ The committed CSV includes:
 
 The dataset does **not** contain a `Continent` field or health-outcome measurements. The dashboard therefore compares countries and cities using the fields that are actually present; it does not invent continent labels or make causal public-health claims.
 
+A data-quality check of the committed snapshot found 23,463 rows across 175 countries. It contains 427 rows without a country and 1 without a city; the dashboard excludes these 428 incomplete-location rows and reports the excluded count. The remaining 23,035 rows have numeric `AQI Value` entries.
+
 ## Run locally
 
 Use Python 3.10 or newer.
